@@ -6,3 +6,5 @@ __pycache__/
 exports/
 venv/
 .venv/
+proxies.txt
+proxies_checked.txt
