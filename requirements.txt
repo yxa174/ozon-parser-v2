@@ -1,0 +1,8 @@
+# Core HTTP
+httpx[http2]>=0.27.0
+
+# Config
+python-dotenv>=1.0.0
+
+# Browser fallback (optional)
+playwright>=1.44.0
