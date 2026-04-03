@@ -3,6 +3,9 @@ Ozon Parser v2 — CLI Entrypoint
 Использование:
   python main.py parse --urls urls.txt
   python main.py parse --urls urls.txt --workers 3
+  python main.py proxy-scrape
+  python main.py proxy-check --input proxies.txt
+  python main.py pipeline --urls urls.txt
   python main.py enqueue --urls urls.txt
   python main.py stats
   python main.py export --output products.json
@@ -108,6 +111,78 @@ def cmd_export(args):
     logger.info("📦 Экспортировано %d товаров в %s", count, args.output)
 
 
+def cmd_proxy_scrape(args):
+    """Команда proxy-scrape — поиск бесплатных прокси."""
+    import asyncio
+    from proxy_scraper import ProxyScraper
+
+    async def _run():
+        async with ProxyScraper() as scraper:
+            return await scraper.scrape_and_save(args.output)
+
+    count = asyncio.run(_run())
+    print(f"\n✅ Найдено {count} прокси → {args.output}")
+
+
+def cmd_proxy_check(args):
+    """Команда proxy-check — проверка прокси."""
+    from proxy_checker import ProxyChecker
+
+    checker = ProxyChecker()
+    alive = checker.check_and_save(args.input, args.output, args.workers)
+    print(f"\n✅ Рабочих прокси: {len(alive)} → {args.output}")
+
+
+def cmd_pipeline(args):
+    """Полный пайплайн: scrape → check → parse."""
+    import asyncio
+    from proxy_scraper import ProxyScraper
+
+    print("\n" + "=" * 50)
+    print("🔄 ПОЛНЫЙ ПАЙПЛАЙН: scrape → check → parse")
+    print("=" * 50)
+
+    # Шаг 1: Scraping прокси
+    print("\n📡 Шаг 1: Поиск прокси...")
+    async def _scrape():
+        async with ProxyScraper() as scraper:
+            return await scraper.scrape_and_save(args.proxy_file)
+
+    proxy_count = asyncio.run(_scrape())
+    if proxy_count == 0:
+        logger.warning("⚠️ Прокси не найдены, продолжаем без них")
+        args.no_proxy = True
+
+    # Шаг 2: Проверка прокси
+    if not getattr(args, "no_proxy", False):
+        print("\n🔍 Шаг 2: Проверка прокси...")
+        from proxy_checker import ProxyChecker
+
+        checker = ProxyChecker()
+        alive = checker.check_and_save(args.proxy_file, args.proxy_checked, args.proxy_workers)
+
+        if not alive:
+            logger.warning("⚠️ Нет рабочих прокси, продолжаем без них")
+            args.no_proxy = True
+        else:
+            config.proxy_file = args.proxy_checked
+            config.use_proxy_rotation = True
+            print(f"✅ Используется {len(alive)} рабочих прокси")
+
+    # Шаг 3: Парсинг
+    print("\n🕷 Шаг 3: Парсинг товаров...")
+    urls = load_urls(args.urls)
+    if not urls:
+        logger.warning("⚠️ Нет URL для парсинга")
+        return
+
+    if args.workers:
+        config.max_workers = args.workers
+
+    orchestrator = ParserOrchestrator()
+    orchestrator.run(urls=urls)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Ozon Parser v2 — Парсер карточек товаров",
@@ -133,6 +208,24 @@ def main():
     p_export = subparsers.add_parser("export", help="Экспорт в JSON")
     p_export.add_argument("--output", default="products.json", help="Файл вывода")
 
+    # proxy-scrape
+    p_scrape = subparsers.add_parser("proxy-scrape", help="Найти бесплатные прокси")
+    p_scrape.add_argument("--output", default="proxies.txt", help="Файл для сохранения")
+
+    # proxy-check
+    p_check = subparsers.add_parser("proxy-check", help="Проверить прокси")
+    p_check.add_argument("--input", default="proxies.txt", help="Файл с прокси")
+    p_check.add_argument("--output", default="proxies_checked.txt", help="Файл рабочих прокси")
+    p_check.add_argument("--workers", type=int, default=20, help="Кол-во воркеров")
+
+    # pipeline (scrape → check → parse)
+    p_pipeline = subparsers.add_parser("pipeline", help="Scrape → Check → Parse")
+    p_pipeline.add_argument("--urls", required=True, help="Файл с URL товаров")
+    p_pipeline.add_argument("--proxy-file", default="proxies.txt", help="Файл для сырых прокси")
+    p_pipeline.add_argument("--proxy-checked", default="proxies_checked.txt", help="Файл рабочих прокси")
+    p_pipeline.add_argument("--proxy-workers", type=int, default=20, help="Воркеров для проверки прокси")
+    p_pipeline.add_argument("--workers", type=int, help="Воркеров для парсинга")
+
     args = parser.parse_args()
 
     if args.command == "parse":
@@ -145,6 +238,12 @@ def main():
         cmd_stats(args)
     elif args.command == "export":
         cmd_export(args)
+    elif args.command == "proxy-scrape":
+        cmd_proxy_scrape(args)
+    elif args.command == "proxy-check":
+        cmd_proxy_check(args)
+    elif args.command == "pipeline":
+        cmd_pipeline(args)
     else:
         parser.print_help()
 
