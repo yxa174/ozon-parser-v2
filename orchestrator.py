@@ -21,12 +21,18 @@ logger = logging.getLogger(__name__)
 class ParserOrchestrator:
     """Оркестратор парсинга с пулом воркеров."""
 
-    def __init__(self):
+    def __init__(self, proxies: Optional[List[str]] = None):
         self.db = DatabaseManager(db_path=config.db_path)
-        self.proxies = load_proxies(config.proxy_file) if config.use_proxy_rotation else []
+        self.proxies = proxies or []
         self.proxy_rotator = ProxyRotator(self.proxies) if self.proxies else None
         self.stats = ParseStats()
         self._running = False
+
+    def update_proxies(self, proxies: List[str]):
+        """Обновить пул прокси на лету."""
+        self.proxies = proxies
+        self.proxy_rotator = ProxyRotator(proxies)
+        logger.info("🔄 Пул прокси обновлён: %d штук", len(proxies))
 
     def run(self, urls: Optional[List[str]] = None, enqueue_only: bool = False):
         """Запустить парсинг."""

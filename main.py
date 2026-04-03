@@ -134,43 +134,14 @@ def cmd_proxy_check(args):
 
 
 def cmd_pipeline(args):
-    """Полный пайплайн: scrape → check → parse."""
-    import asyncio
-    from proxy_scraper import ProxyScraper
+    """Полный пайплайн: scrape → check → как только 10 живых → parse → в фоне допроверка."""
+    import threading
+    from proxy_manager import ProxyManager
 
     print("\n" + "=" * 50)
-    print("🔄 ПОЛНЫЙ ПАЙПЛАЙН: scrape → check → parse")
+    print("🔄 ПАЙПЛАЙН: scrape → check → parse (от 10 живых)")
     print("=" * 50)
 
-    # Шаг 1: Scraping прокси
-    print("\n📡 Шаг 1: Поиск прокси...")
-    async def _scrape():
-        async with ProxyScraper() as scraper:
-            return await scraper.scrape_and_save(args.proxy_file)
-
-    proxy_count = asyncio.run(_scrape())
-    if proxy_count == 0:
-        logger.warning("⚠️ Прокси не найдены, продолжаем без них")
-        args.no_proxy = True
-
-    # Шаг 2: Проверка прокси
-    if not getattr(args, "no_proxy", False):
-        print("\n🔍 Шаг 2: Проверка прокси...")
-        from proxy_checker import ProxyChecker
-
-        checker = ProxyChecker()
-        alive = checker.check_and_save(args.proxy_file, args.proxy_checked, args.proxy_workers)
-
-        if not alive:
-            logger.warning("⚠️ Нет рабочих прокси, продолжаем без них")
-            args.no_proxy = True
-        else:
-            config.proxy_file = args.proxy_checked
-            config.use_proxy_rotation = True
-            print(f"✅ Используется {len(alive)} рабочих прокси")
-
-    # Шаг 3: Парсинг
-    print("\n🕷 Шаг 3: Парсинг товаров...")
     urls = load_urls(args.urls)
     if not urls:
         logger.warning("⚠️ Нет URL для парсинга")
@@ -180,7 +151,45 @@ def cmd_pipeline(args):
         config.max_workers = args.workers
 
     orchestrator = ParserOrchestrator()
-    orchestrator.run(urls=urls)
+    parse_thread = None
+    parse_started = threading.Event()
+
+    def on_proxies_ready(alive_proxies):
+        """Callback: когда набралось min_alive прокси."""
+        nonlocal parse_thread
+        print(f"\n🚀 Набрано {len(alive_proxies)} живых прокси — запускаю парсинг!")
+        orchestrator.update_proxies(alive_proxies)
+        config.use_proxy_rotation = True
+
+        parse_thread = threading.Thread(
+            target=orchestrator.run,
+            kwargs={"urls": urls},
+            daemon=True,
+        )
+        parse_thread.start()
+        parse_started.set()
+
+    # Запуск ProxyManager
+    manager = ProxyManager(
+        min_alive=args.min_alive,
+        check_workers=args.proxy_workers,
+        proxy_file=args.proxy_file,
+        checked_file=args.proxy_checked,
+    )
+
+    # Run в отдельном потоке чтобы не блокировать main
+    def _run_manager():
+        manager.run(on_ready=on_proxies_ready)
+        if parse_started.is_set():
+            print("\n✅ Все прокси проверены, парсинг продолжается...")
+
+    manager_thread = threading.Thread(target=_run_manager, daemon=True)
+    manager_thread.start()
+
+    # Ждём пока парсинг завершится
+    manager_thread.join()
+    if parse_thread:
+        parse_thread.join()
 
 
 def main():
@@ -219,12 +228,13 @@ def main():
     p_check.add_argument("--workers", type=int, default=20, help="Кол-во воркеров")
 
     # pipeline (scrape → check → parse)
-    p_pipeline = subparsers.add_parser("pipeline", help="Scrape → Check → Parse")
+    p_pipeline = subparsers.add_parser("pipeline", help="Scrape → Check → Parse (от 10 живых)")
     p_pipeline.add_argument("--urls", required=True, help="Файл с URL товаров")
     p_pipeline.add_argument("--proxy-file", default="proxies.txt", help="Файл для сырых прокси")
     p_pipeline.add_argument("--proxy-checked", default="proxies_checked.txt", help="Файл рабочих прокси")
     p_pipeline.add_argument("--proxy-workers", type=int, default=20, help="Воркеров для проверки прокси")
     p_pipeline.add_argument("--workers", type=int, help="Воркеров для парсинга")
+    p_pipeline.add_argument("--min-alive", type=int, default=10, help="Мин. живых прокси для старта")
 
     args = parser.parse_args()
 
