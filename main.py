@@ -231,7 +231,7 @@ def normalize_data(data, url):
     # delivery_days — вычисляем из даты первой доставки
     if data.get('delivery') and data['delivery'].get('methods'):
         first_method = data['delivery']['methods'][0]
-        date_text = first_method.get('date', '')
+        date_text = first_method.get('date', '') or ''
 
         # Парсим дату "С 30 мая", "Завтра, 9 мая", etc.
         months = {'января': 1, 'февраля': 2, 'марта': 3, 'апреля': 4, 'мая': 5, 'июня': 6,
@@ -291,10 +291,17 @@ def normalize_data(data, url):
     return ordered_data
 
 
+import time
+
 # Запуск
 options = uc.ChromeOptions()
 options.add_argument("--disable-gpu")
 driver = uc.Chrome(options=options)
+
+print("🌐 Открываю ozon.ru...")
+driver.get("https://ozon.ru")
+time.sleep(3)
+print("  ✅ Страница загружена, начинаем парсинг...\n")
 
 urls_file = Path(__file__).parent / 'urls.txt'
 urls = [line.strip() for line in urls_file.read_text(encoding='utf-8').splitlines() if line.strip()]
@@ -344,9 +351,9 @@ for result in results:
         today = datetime.now()
 
         result['delivery_days'] = None
-        if 'Завтра' in date_text:
+        if 'Завтра' in (date_text or ''):
             result['delivery_days'] = 1
-        elif 'С' in date_text or any(m in date_text for m in months):
+        elif 'С' in (date_text or '') or any(m in (date_text or '') for m in months):
             match = re.search(r'(\d+)\s*([а-яё]+)', date_text, re.IGNORECASE)
             if match:
                 try:
